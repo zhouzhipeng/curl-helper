@@ -16,9 +16,9 @@ struct BatchEntry {
 
 /// A line in the diff view
 enum DiffLine {
-    Same(String),
-    Added(String),
-    Removed(String),
+    Same,
+    Added,
+    Removed,
 }
 
 /// Simple line-based diff using longest common subsequence.
@@ -45,14 +45,14 @@ fn compute_diff(left: &str, right: &str) -> Vec<DiffLine> {
     let (mut i, mut j) = (n, m);
     while i > 0 || j > 0 {
         if i > 0 && j > 0 && left_lines[i - 1] == right_lines[j - 1] {
-            result.push(DiffLine::Same(left_lines[i - 1].to_string()));
+            result.push(DiffLine::Same);
             i -= 1;
             j -= 1;
         } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-            result.push(DiffLine::Added(right_lines[j - 1].to_string()));
+            result.push(DiffLine::Added);
             j -= 1;
         } else {
-            result.push(DiffLine::Removed(left_lines[i - 1].to_string()));
+            result.push(DiffLine::Removed);
             i -= 1;
         }
     }
@@ -95,6 +95,8 @@ pub struct CurlHelperApp {
     diff_left_label: String,
     diff_right_label: String,
     diff_lines: Vec<DiffLine>,
+    diff_left_body: String,
+    diff_right_body: String,
 
     // Search filter
     search_filter: String,
@@ -209,6 +211,8 @@ impl CurlHelperApp {
             diff_left_label: String::new(),
             diff_right_label: String::new(),
             diff_lines: Vec::new(),
+            diff_left_body: String::new(),
+            diff_right_body: String::new(),
             search_filter: String::new(),
             storage,
             dirty: false,
@@ -662,7 +666,7 @@ impl CurlHelperApp {
 
                         // Editable parameters panel (only for active card)
                         if is_active {
-                            let params = curl_parser::extract_params(&self.curls[i].command);
+                            let params: Vec<_> = curl_parser::extract_params(&self.curls[i].command).into_iter().filter(|(cat, _, _)| cat != "Method").collect();
                             if !params.is_empty() {
                                 let params_id = format!("params_{}", self.curls[i].id);
                                 egui::CollapsingHeader::new(
@@ -873,6 +877,8 @@ impl CurlHelperApp {
                 if checked.len() >= 2 {
                     self.diff_left_label = checked[0].0.clone();
                     self.diff_right_label = checked[1].0.clone();
+                    self.diff_left_body = checked[0].1.clone();
+                    self.diff_right_body = checked[1].1.clone();
                     self.diff_lines = compute_diff(&checked[0].1, &checked[1].1);
                     self.show_diff = true;
                 }
@@ -992,61 +998,132 @@ impl CurlHelperApp {
         });
     }
 
-    // ── Diff dialog ──────────────────────────────────────────────────
+    // ── Diff dialog (side-by-side) ──────────────────────────────────
     fn render_diff_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_diff;
         egui::Window::new("Response Diff")
             .open(&mut open)
             .resizable(true)
-            .default_width(700.0)
-            .default_height(500.0)
+            .default_width(1100.0)
+            .default_height(650.0)
             .show(ctx, |ui| {
-                // Header
-                ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::from_rgb(255, 120, 120), egui::RichText::new(format!("- {}", self.diff_left_label)).size(13.0));
-                    ui.separator();
-                    ui.colored_label(egui::Color32::from_rgb(120, 255, 120), egui::RichText::new(format!("+ {}", self.diff_right_label)).size(13.0));
-                });
-                ui.separator();
-
                 // Stats
-                let added = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Added(_))).count();
-                let removed = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Removed(_))).count();
-                let same = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Same(_))).count();
+                let added = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Added)).count();
+                let removed = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Removed)).count();
+                let same = self.diff_lines.iter().filter(|l| matches!(l, DiffLine::Same)).count();
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(format!("{} unchanged", same)).size(11.0).color(egui::Color32::from_rgb(150, 150, 150)));
                     ui.colored_label(egui::Color32::from_rgb(255, 120, 120), egui::RichText::new(format!("{} removed", removed)).size(11.0));
                     ui.colored_label(egui::Color32::from_rgb(120, 255, 120), egui::RichText::new(format!("{} added", added)).size(11.0));
                 });
-                ui.add_space(4.0);
+                ui.add_space(2.0);
 
-                // Diff content
-                egui::ScrollArea::vertical().id_salt("diff_scroll").show(ui, |ui| {
-                    for line in &self.diff_lines {
-                        match line {
-                            DiffLine::Same(s) => {
-                                ui.label(egui::RichText::new(format!("  {}", s)).font(egui::FontId::monospace(12.0)).color(egui::Color32::from_rgb(180, 180, 180)));
-                            }
-                            DiffLine::Removed(s) => {
-                                let r = ui.available_width();
-                                egui::Frame::none()
-                                    .fill(egui::Color32::from_rgba_premultiplied(255, 60, 60, 25))
-                                    .show(ui, |ui| {
-                                        ui.set_min_width(r);
-                                        ui.label(egui::RichText::new(format!("- {}", s)).font(egui::FontId::monospace(12.0)).color(egui::Color32::from_rgb(255, 130, 130)));
-                                    });
-                            }
-                            DiffLine::Added(s) => {
-                                let r = ui.available_width();
-                                egui::Frame::none()
-                                    .fill(egui::Color32::from_rgba_premultiplied(60, 255, 60, 20))
-                                    .show(ui, |ui| {
-                                        ui.set_min_width(r);
-                                        ui.label(egui::RichText::new(format!("+ {}", s)).font(egui::FontId::monospace(12.0)).color(egui::Color32::from_rgb(130, 255, 130)));
-                                    });
-                            }
+                // Build per-line diff markers for left and right
+                // left_markers[line_idx] = true if that line is a "removed" line
+                // right_markers[line_idx] = true if that line is an "added" line
+                let left_src_lines: Vec<&str> = self.diff_left_body.lines().collect();
+                let right_src_lines: Vec<&str> = self.diff_right_body.lines().collect();
+
+                let mut left_diff_set = std::collections::HashSet::new();
+                let mut right_diff_set = std::collections::HashSet::new();
+                {
+                    let mut li = 0usize;
+                    let mut ri = 0usize;
+                    for dl in &self.diff_lines {
+                        match dl {
+                            DiffLine::Same => { li += 1; ri += 1; }
+                            DiffLine::Removed => { left_diff_set.insert(li); li += 1; }
+                            DiffLine::Added => { right_diff_set.insert(ri); ri += 1; }
                         }
                     }
+                }
+
+                let mono = egui::FontId::monospace(12.0);
+                let half_w = ui.available_width() / 2.0 - 6.0;
+                let gutter_w = 14.0;
+                let line_h = 16.0;
+
+                // Column headers
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(egui::vec2(half_w, line_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.colored_label(egui::Color32::from_rgb(255, 150, 150), egui::RichText::new(&self.diff_left_label).size(12.0).strong());
+                    });
+                    ui.separator();
+                    ui.colored_label(egui::Color32::from_rgb(150, 255, 150), egui::RichText::new(&self.diff_right_label).size(12.0).strong());
+                });
+                ui.separator();
+
+                // Two side-by-side scroll areas sharing height
+                let avail = ui.available_size();
+                ui.horizontal(|ui| {
+                    // ── Left panel ──
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(half_w, avail.y),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            egui::ScrollArea::both()
+                                .id_salt("diff_left")
+                                .show(ui, |ui| {
+                                    for (li, line) in left_src_lines.iter().enumerate() {
+                                        let is_diff = left_diff_set.contains(&li);
+                                        ui.horizontal(|ui| {
+                                            // Gutter marker
+                                            let (gr, _) = ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+                                            if is_diff {
+                                                ui.painter().circle_filled(gr.center(), 4.0, egui::Color32::from_rgb(255, 100, 100));
+                                            }
+                                            // Line number
+                                            ui.label(egui::RichText::new(format!("{:>3}", li + 1)).font(mono.clone()).size(11.0).color(egui::Color32::from_rgb(80, 80, 80)));
+                                            // Text
+                                            let color = if is_diff {
+                                                egui::Color32::from_rgb(255, 140, 140)
+                                            } else {
+                                                egui::Color32::from_rgb(190, 190, 190)
+                                            };
+                                            ui.label(egui::RichText::new(*line).font(mono.clone()).color(color));
+                                        });
+                                    }
+                                });
+                        },
+                    );
+
+                    // Vertical divider
+                    let div_rect = ui.allocate_rect(
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(2.0, avail.y)),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(div_rect.rect, egui::Rounding::ZERO, egui::Color32::from_rgb(55, 55, 60));
+
+                    // ── Right panel ──
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), avail.y),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            egui::ScrollArea::both()
+                                .id_salt("diff_right")
+                                .show(ui, |ui| {
+                                    for (ri, line) in right_src_lines.iter().enumerate() {
+                                        let is_diff = right_diff_set.contains(&ri);
+                                        ui.horizontal(|ui| {
+                                            // Gutter marker
+                                            let (gr, _) = ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+                                            if is_diff {
+                                                ui.painter().circle_filled(gr.center(), 4.0, egui::Color32::from_rgb(100, 255, 100));
+                                            }
+                                            // Line number
+                                            ui.label(egui::RichText::new(format!("{:>3}", ri + 1)).font(mono.clone()).size(11.0).color(egui::Color32::from_rgb(80, 80, 80)));
+                                            // Text
+                                            let color = if is_diff {
+                                                egui::Color32::from_rgb(140, 255, 140)
+                                            } else {
+                                                egui::Color32::from_rgb(190, 190, 190)
+                                            };
+                                            ui.label(egui::RichText::new(*line).font(mono.clone()).color(color));
+                                        });
+                                    }
+                                });
+                        },
+                    );
                 });
             });
         self.show_diff = open;
@@ -1146,6 +1223,9 @@ impl eframe::App for CurlHelperApp {
 
         // Find & Replace
         if self.show_find_replace { self.render_find_replace(ctx); }
+
+        // Diff dialog
+        if self.show_diff { self.render_diff_dialog(ctx); }
 
         self.auto_save();
     }
