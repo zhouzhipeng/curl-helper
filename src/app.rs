@@ -168,6 +168,26 @@ fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     }
 }
 
+/// Full-width left-aligned selectable row for group list.
+fn group_row(ui: &mut egui::Ui, width: f32, height: f32, selected: bool, label: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let visuals = ui.visuals();
+    if selected {
+        ui.painter().rect_filled(rect, egui::Rounding::same(3.0), visuals.selection.bg_fill);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, egui::Rounding::same(3.0), visuals.widgets.hovered.bg_fill);
+    }
+    let text_color = if selected { egui::Color32::WHITE } else { visuals.text_color() };
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        text_color,
+    );
+    resp
+}
+
 fn status_color(code: Option<i32>) -> egui::Color32 {
     match code {
         Some(c) if (200..300).contains(&c) => egui::Color32::from_rgb(80, 200, 120),
@@ -408,18 +428,35 @@ impl CurlHelperApp {
         let row_width = ui.available_width();
         let row_height = 24.0;
 
+        // Deferred group actions
+        let mut exec_group_id: Option<Option<String>> = None; // None=all, Some(gid)
+        let mut export_group_id: Option<Option<String>> = None;
+        let mut import_group_id: Option<Option<String>> = None;
+
         // "All"
         {
             let count = self.curls.len();
-            let resp = ui.add_sized(
-                [row_width, row_height],
-                egui::SelectableLabel::new(self.active_group_id.is_none(), format!("  All ({})", count)),
-            );
+            let resp = group_row(ui, row_width, row_height, self.active_group_id.is_none(), &format!("All ({})", count));
             let row_rect = resp.rect;
             self.group_rects.push((None, row_rect));
             if resp.clicked() && !is_dragging {
                 self.active_group_id = None;
             }
+            resp.context_menu(|ui| {
+                if ui.button("Execute All").clicked() {
+                    exec_group_id = Some(None);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Export All").clicked() {
+                    export_group_id = Some(None);
+                    ui.close_menu();
+                }
+                if ui.button("Import").clicked() {
+                    import_group_id = Some(None);
+                    ui.close_menu();
+                }
+            });
             if is_dragging {
                 if let Some(pos) = pointer_pos {
                     if row_rect.contains(pos) {
@@ -450,10 +487,7 @@ impl CurlHelperApp {
             }
 
             let selected = self.active_group_id.as_deref() == Some(&gid);
-            let resp = ui.add_sized(
-                [row_width, row_height],
-                egui::SelectableLabel::new(selected, format!("  {} ({})", self.groups[gi].name, count)),
-            );
+            let resp = group_row(ui, row_width, row_height, selected, &format!("{} ({})", self.groups[gi].name, count));
             let row_rect = resp.rect;
             self.group_rects.push((Some(gid.clone()), row_rect));
 
@@ -462,13 +496,27 @@ impl CurlHelperApp {
             }
 
             resp.context_menu(|ui| {
+                if ui.button("Execute All in Group").clicked() {
+                    exec_group_id = Some(Some(gid.clone()));
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button("Rename").clicked() {
                     self.editing_group_id = Some(gid.clone());
                     self.editing_group_name = self.groups[gi].name.clone();
                     ui.close_menu();
                 }
-                if ui.button("Delete group").clicked() {
+                if ui.button("Delete Group").clicked() {
                     delete_group = Some(gi);
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Export Group").clicked() {
+                    export_group_id = Some(Some(gid.clone()));
+                    ui.close_menu();
+                }
+                if ui.button("Import into Group").clicked() {
+                    import_group_id = Some(Some(gid.clone()));
                     ui.close_menu();
                 }
             });
@@ -495,6 +543,68 @@ impl CurlHelperApp {
             }
             self.groups.remove(gi);
             self.dirty = true;
+        }
+
+        // ── Execute all in group ──
+        if let Some(gid_opt) = exec_group_id {
+            let indices: Vec<usize> = self.curls.iter().enumerate()
+                .filter(|(_, c)| match &gid_opt {
+                    Some(gid) => c.group_id.as_deref() == Some(gid),
+                    None => true,
+                })
+                .map(|(i, _)| i)
+                .collect();
+            self.execute_batch(&indices);
+        }
+
+        // ── Export group ──
+        if let Some(gid_opt) = export_group_id {
+            let items: Vec<&CurlItem> = self.curls.iter()
+                .filter(|c| match &gid_opt {
+                    Some(gid) => c.group_id.as_deref() == Some(gid),
+                    None => true,
+                })
+                .collect();
+            let group_name = match &gid_opt {
+                Some(gid) => self.groups.iter().find(|g| g.id == *gid).map(|g| g.name.clone()).unwrap_or("group".into()),
+                None => "all".into(),
+            };
+            // Strip results before export
+            let export_items: Vec<CurlItem> = items.iter().map(|c| {
+                let mut cl = (*c).clone();
+                cl.results.clear();
+                cl
+            }).collect();
+            if let Ok(json) = serde_json::to_string_pretty(&export_items) {
+                let default_name = format!("{}.json", group_name);
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_file_name(&default_name)
+                    .add_filter("JSON", &["json"])
+                    .save_file()
+                {
+                    let _ = std::fs::write(path, json);
+                }
+            }
+        }
+
+        // ── Import group ──
+        if let Some(gid_opt) = import_group_id {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("JSON", &["json"])
+                .pick_file()
+            {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(mut items) = serde_json::from_str::<Vec<CurlItem>>(&content) {
+                        for item in &mut items {
+                            item.id = uuid::Uuid::new_v4().to_string();
+                            item.group_id = gid_opt.clone();
+                            item.selected = false;
+                        }
+                        self.curls.extend(items);
+                        self.dirty = true;
+                    }
+                }
+            }
         }
 
         ui.add_space(8.0);
@@ -678,7 +788,7 @@ impl CurlHelperApp {
                                         .spacing([6.0, 3.0])
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            for (cat, key, val) in &params {
+                                            for (_cat, key, val) in &params {
                                                 // Key
                                                 ui.label(egui::RichText::new(key).size(12.0).color(egui::Color32::from_rgb(156, 220, 254)));
 
