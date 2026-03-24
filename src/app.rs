@@ -411,13 +411,11 @@ impl CurlHelperApp {
         // "All"
         {
             let count = self.curls.len();
-            let row = ui.allocate_ui_with_layout(
-                egui::vec2(row_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| ui.selectable_label(self.active_group_id.is_none(), format!("All ({})", count)),
+            let resp = ui.add_sized(
+                [row_width, row_height],
+                egui::SelectableLabel::new(self.active_group_id.is_none(), format!("  All ({})", count)),
             );
-            let row_rect = row.response.rect;
-            let resp = row.inner;
+            let row_rect = resp.rect;
             self.group_rects.push((None, row_rect));
             if resp.clicked() && !is_dragging {
                 self.active_group_id = None;
@@ -452,13 +450,11 @@ impl CurlHelperApp {
             }
 
             let selected = self.active_group_id.as_deref() == Some(&gid);
-            let row = ui.allocate_ui_with_layout(
-                egui::vec2(row_width, row_height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| ui.selectable_label(selected, format!("{} ({})", self.groups[gi].name, count)),
+            let resp = ui.add_sized(
+                [row_width, row_height],
+                egui::SelectableLabel::new(selected, format!("  {} ({})", self.groups[gi].name, count)),
             );
-            let row_rect = row.response.rect;
-            let resp = row.inner;
+            let row_rect = resp.rect;
             self.group_rects.push((Some(gid.clone()), row_rect));
 
             if resp.clicked() && !is_dragging {
@@ -678,20 +674,11 @@ impl CurlHelperApp {
                                 .default_open(true)
                                 .show(ui, |ui| {
                                     egui::Grid::new(format!("params_grid_{}", self.curls[i].id))
-                                        .num_columns(3)
+                                        .num_columns(2)
                                         .spacing([6.0, 3.0])
                                         .striped(true)
                                         .show(ui, |ui| {
                                             for (cat, key, val) in &params {
-                                                // Category badge
-                                                let badge_color = match cat.as_str() {
-                                                    "Query" => egui::Color32::from_rgb(78, 201, 176),
-                                                    "Header" => egui::Color32::from_rgb(156, 220, 254),
-                                                    "Data" => egui::Color32::from_rgb(181, 206, 168),
-                                                    _ => egui::Color32::from_rgb(180, 180, 180),
-                                                };
-                                                ui.label(egui::RichText::new(cat).size(10.0).color(badge_color));
-
                                                 // Key
                                                 ui.label(egui::RichText::new(key).size(12.0).color(egui::Color32::from_rgb(156, 220, 254)));
 
