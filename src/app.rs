@@ -764,6 +764,7 @@ impl CurlHelperApp {
                                 .id(egui::Id::new(&editor_id))
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(3)
+                                .hint_text("curl ...")
                                 .font(egui::TextStyle::Monospace)
                                 .layouter(&mut layouter),
                         );
@@ -1004,7 +1005,16 @@ impl CurlHelperApp {
                                 ui.checkbox(&mut self.current_batch[bi].checked, "");
                             }
 
-                            ui.label(egui::RichText::new(&header_label).size(13.0).strong().color(egui::Color32::from_rgb(180, 200, 255)));
+                            // Truncate name to fit
+                            let truncated = if header_label.len() > 40 {
+                                format!("{}...", &header_label[..40])
+                            } else {
+                                header_label.clone()
+                            };
+
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(&truncated).size(13.0).strong().color(egui::Color32::from_rgb(180, 200, 255))
+                            ).truncate());
 
                             if let Some(ref res) = self.current_batch[bi].result {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1277,6 +1287,7 @@ impl eframe::App for CurlHelperApp {
         }
 
         ctx.set_visuals(egui::Visuals::dark());
+        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
 
         // Toolbar
         egui::TopBottomPanel::top("toolbar")
