@@ -359,25 +359,42 @@ impl CurlHelperApp {
 
             ui.separator();
 
-            let in_group = |c: &CurlItem| match &self.active_group_id {
-                Some(gid) => c.group_id.as_deref() == Some(gid),
-                None => true,
+            let filter = self.search_filter.to_lowercase();
+            let is_visible = |c: &CurlItem| -> bool {
+                // Group filter
+                if let Some(ref gid) = self.active_group_id {
+                    if c.group_id.as_deref() != Some(gid) {
+                        return false;
+                    }
+                }
+                // Search filter
+                if !filter.is_empty() {
+                    return c.name.to_lowercase().contains(&filter)
+                        || c.command.to_lowercase().contains(&filter);
+                }
+                true
             };
-            let group_count = self.curls.iter().filter(|c| in_group(c)).count();
-            let all_selected = group_count > 0 && self.curls.iter().filter(|c| in_group(c)).all(|c| c.selected);
+            let visible_count = self.curls.iter().filter(|c| is_visible(c)).count();
+            let all_selected = visible_count > 0 && self.curls.iter().filter(|c| is_visible(c)).all(|c| c.selected);
             if ui
                 .button(egui::RichText::new(if all_selected { "Deselect All" } else { "Select All" }).size(14.0))
                 .clicked()
             {
-                let v = !all_selected;
-                let gid = self.active_group_id.clone();
+                // First: deselect all
                 for c in &mut self.curls {
-                    let matches = match &gid {
-                        Some(g) => c.group_id.as_deref() == Some(g),
-                        None => true,
-                    };
-                    if matches {
-                        c.selected = v;
+                    c.selected = false;
+                }
+                // Then: select visible (only when toggling on)
+                if !all_selected {
+                    let filter2 = self.search_filter.to_lowercase();
+                    for c in &mut self.curls {
+                        let vis = match &self.active_group_id {
+                            Some(gid) => c.group_id.as_deref() == Some(gid),
+                            None => true,
+                        };
+                        if vis && (filter2.is_empty() || c.name.to_lowercase().contains(&filter2) || c.command.to_lowercase().contains(&filter2)) {
+                            c.selected = true;
+                        }
                     }
                 }
             }

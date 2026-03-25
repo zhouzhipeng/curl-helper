@@ -500,8 +500,13 @@ pub fn extract_params(input: &str) -> Vec<(String, String, String)> {
                 params.push(("Method".to_string(), "method".to_string(), m.clone()));
             }
             Token::DataValue(d) => {
-                // Try to parse form-urlencoded data: key=val&key=val
-                if d.contains('=') && !d.starts_with('{') {
+                if d.starts_with('{') || d.starts_with('[') {
+                    // Parse JSON body and flatten to key-value pairs
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(d) {
+                        flatten_json("", &json, &mut params);
+                    }
+                } else if d.contains('=') {
+                    // Form-urlencoded: key=val&key=val
                     for pair in d.split('&') {
                         if let Some(eq) = pair.find('=') {
                             params.push((
@@ -521,9 +526,77 @@ pub fn extract_params(input: &str) -> Vec<(String, String, String)> {
     params
 }
 
+/// Flatten a JSON value into (category, key_path, value) triples.
+fn flatten_json(prefix: &str, val: &serde_json::Value, params: &mut Vec<(String, String, String)>) {
+    match val {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                let key = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
+                match v {
+                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                        flatten_json(&key, v, params);
+                    }
+                    _ => {
+                        let val_str = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => v.to_string(),
+                        };
+                        params.push(("Body".to_string(), key, val_str));
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                let key = format!("{}[{}]", prefix, i);
+                flatten_json(&key, v, params);
+            }
+        }
+        _ => {
+            let val_str = match val {
+                serde_json::Value::String(s) => s.clone(),
+                _ => val.to_string(),
+            };
+            if !prefix.is_empty() {
+                params.push(("Body".to_string(), prefix.to_string(), val_str));
+            }
+        }
+    }
+}
+
 /// Replace a specific parameter value in the command.
-/// Searches for `key=old_value` and replaces with `key=new_value`.
+/// Handles both `key=old_value` (query/form) and JSON `"key": old_value` patterns.
 pub fn replace_param_value(command: &str, key: &str, old_value: &str, new_value: &str) -> String {
+    // Extract the leaf key (last segment after '.' or '[')
+    let leaf = key.rsplit('.').next().unwrap_or(key);
+    let leaf = leaf.split('[').next().unwrap_or(leaf);
+
+    // Try JSON patterns: "leaf": "old" or "leaf": old (number)
+    // String value
+    let find_str = format!("\"{}\": \"{}\"", leaf, old_value);
+    let replace_str = format!("\"{}\": \"{}\"", leaf, new_value);
+    if command.contains(&find_str) {
+        return command.replacen(&find_str, &replace_str, 1);
+    }
+    // Without space after colon
+    let find_str2 = format!("\"{}\":\"{}\"", leaf, old_value);
+    let replace_str2 = format!("\"{}\":\"{}\"", leaf, new_value);
+    if command.contains(&find_str2) {
+        return command.replacen(&find_str2, &replace_str2, 1);
+    }
+    // Numeric value
+    let find_num = format!("\"{}\": {}", leaf, old_value);
+    let replace_num = format!("\"{}\": {}", leaf, new_value);
+    if command.contains(&find_num) {
+        return command.replacen(&find_num, &replace_num, 1);
+    }
+    let find_num2 = format!("\"{}\":{}", leaf, old_value);
+    let replace_num2 = format!("\"{}\":{}", leaf, new_value);
+    if command.contains(&find_num2) {
+        return command.replacen(&find_num2, &replace_num2, 1);
+    }
+
+    // Fallback: query/form style key=value
     let find = format!("{}={}", key, old_value);
     let replace = format!("{}={}", key, new_value);
     command.replacen(&find, &replace, 1)
