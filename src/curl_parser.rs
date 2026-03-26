@@ -500,9 +500,12 @@ pub fn extract_params(input: &str) -> Vec<(String, String, String)> {
                 params.push(("Method".to_string(), "method".to_string(), m.clone()));
             }
             Token::DataValue(d) => {
-                if d.starts_with('{') || d.starts_with('[') {
+                let trimmed = d.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                    // Unescape \" → " for JSON inside double-quoted shell strings
+                    let unescaped = trimmed.replace("\\\"", "\"");
                     // Parse JSON body and flatten to key-value pairs
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(d) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&unescaped) {
                         flatten_json("", &json, &mut params);
                     }
                 } else if d.contains('=') {
