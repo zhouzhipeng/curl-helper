@@ -104,6 +104,7 @@ pub struct CurlHelperApp {
     // Storage
     storage: Storage,
     dirty: bool,
+    theme_initialized: bool,
 }
 
 // ── Icon drawing helpers ─────────────────────────────────────────────
@@ -236,6 +237,7 @@ impl CurlHelperApp {
             search_filter: String::new(),
             storage,
             dirty: false,
+            theme_initialized: false,
         }
     }
 
@@ -458,6 +460,7 @@ impl CurlHelperApp {
             self.group_rects.push((None, row_rect));
             if resp.clicked() && !is_dragging {
                 self.active_group_id = None;
+                self.search_filter.clear();
             }
             resp.context_menu(|ui| {
                 if ui.button("Execute All").clicked() {
@@ -487,6 +490,7 @@ impl CurlHelperApp {
         ui.separator();
 
         let mut delete_group: Option<usize> = None;
+        let mut duplicate_group: Option<usize> = None;
         for gi in 0..self.groups.len() {
             let gid = self.groups[gi].id.clone();
             let count = self.curls.iter().filter(|c| c.group_id.as_deref() == Some(&gid)).count();
@@ -510,6 +514,7 @@ impl CurlHelperApp {
 
             if resp.clicked() && !is_dragging {
                 self.active_group_id = Some(gid.clone());
+                self.search_filter.clear();
             }
 
             resp.context_menu(|ui| {
@@ -521,6 +526,10 @@ impl CurlHelperApp {
                 if ui.button("Rename").clicked() {
                     self.editing_group_id = Some(gid.clone());
                     self.editing_group_name = self.groups[gi].name.clone();
+                    ui.close_menu();
+                }
+                if ui.button("Duplicate Group").clicked() {
+                    duplicate_group = Some(gi);
                     ui.close_menu();
                 }
                 if ui.button("Delete Group").clicked() {
@@ -546,6 +555,27 @@ impl CurlHelperApp {
                     }
                 }
             }
+        }
+
+        if let Some(gi) = duplicate_group {
+            let old_gid = self.groups[gi].id.clone();
+            let new_group = Group::new(format!("{} (copy)", self.groups[gi].name));
+            let new_gid = new_group.id.clone();
+            self.groups.insert(gi + 1, new_group);
+            // Duplicate all commands in the group
+            let dups: Vec<CurlItem> = self.curls.iter()
+                .filter(|c| c.group_id.as_deref() == Some(&old_gid))
+                .map(|c| {
+                    let mut dup = c.clone();
+                    dup.id = uuid::Uuid::new_v4().to_string();
+                    dup.group_id = Some(new_gid.clone());
+                    dup.results.clear();
+                    dup.selected = false;
+                    dup
+                })
+                .collect();
+            self.curls.extend(dups);
+            self.dirty = true;
         }
 
         if let Some(gi) = delete_group {
@@ -1297,14 +1327,19 @@ impl CurlHelperApp {
 
 impl eframe::App for CurlHelperApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.check_results();
-
-        if !self.running.is_empty() {
-            ctx.request_repaint();
+        // Set dark theme once on first frame
+        if !self.theme_initialized {
+            ctx.set_visuals(egui::Visuals::dark());
+            ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+            self.theme_initialized = true;
         }
 
-        ctx.set_visuals(egui::Visuals::dark());
-        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+        self.check_results();
+
+        // Only repaint periodically while tasks are running (not every frame)
+        if !self.running.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
 
         // Toolbar
         egui::TopBottomPanel::top("toolbar")
